@@ -6,97 +6,107 @@ const expectEqualSlices = std.testing.expectEqualSlices;
 
 const File = @import("utils.zig").File;
 
-const InstrType = enum {
-    ADDX,
-    NOOP,
-};
-const Instr = union(InstrType) {
-    ADDX: i32,
-    NOOP: void,
-};
+const Board = struct {
+    tail_positions: PositionSet,
+    H: Coords = Coords{ .x = 0, .y = 0 },
+    T: Coords = Coords{ .x = 0, .y = 0 },
 
-fn parse_instr(str: []const u8) !Instr {
-    if (std.mem.eql(u8, str[0..4], "noop"))
-        return Instr{ .NOOP = void{} };
-    return Instr{ .ADDX = try std.fmt.parseInt(i32, str[5..], 10) };
-}
+    const PositionSet = std.AutoHashMap(Coords, void);
 
-test "parse instruction" {
-    try expectEqual(Instr{ .NOOP = void{} }, try parse_instr("noop"));
-    try expectEqual(Instr{ .ADDX = 325 }, try parse_instr("addx 325"));
-    try expectEqual(Instr{ .ADDX = -6325 }, try parse_instr("addx -6325"));
-}
+    const Coords = struct {
+        x: i32,
+        y: i32,
+    };
 
-fn execute_prog(alloc: std.mem.Allocator, prog: []const Instr) ![]i32 {
-    var X: i32 = 1;
-    var ret = std.ArrayList(i32).init(alloc);
-    defer ret.deinit();
-    for (prog) |instr| {
-        switch (instr) {
-            .NOOP => {
-                try ret.append(X);
-            },
-            .ADDX => |val| {
-                try ret.append(X);
-                try ret.append(X);
-                X += val;
-            },
+    const Direction = enum {
+        up,
+        down,
+        right,
+        left,
+    };
+
+    fn init(alloc: std.mem.Allocator) Board {
+        var ret = Board{ .tail_positions = PositionSet.init(alloc) };
+        ret.tail_positions.put(ret.T, void{}) catch unreachable;
+        return ret;
+    }
+    fn deinit(self: *Board) void {
+        self.tail_positions.deinit();
+    }
+
+    fn move(self: *Board, direction: Direction, n: usize) void {
+        for (0..n) |_| {
+            switch (direction) {
+                .up => {
+                    self.H.y += 1;
+                    if (self.H.y > self.T.y + 1) {
+                        self.T.x = self.H.x;
+                        self.T.y = self.H.y - 1;
+                    }
+                },
+                .down => {
+                    self.H.y -= 1;
+                    if (self.H.y < self.T.y - 1) {
+                        self.T.x = self.H.x;
+                        self.T.y = self.H.y + 1;
+                    }
+                },
+                .right => {
+                    self.H.x += 1;
+                    if (self.H.x > self.T.x + 1) {
+                        self.T.y = self.H.y;
+                        self.T.x = self.H.x - 1;
+                    }
+                },
+                .left => {
+                    self.H.x -= 1;
+                    if (self.H.x < self.T.x - 1) {
+                        self.T.y = self.H.y;
+                        self.T.x = self.H.x + 1;
+                    }
+                },
+            }
+            self.tail_positions.put(self.T, void{}) catch unreachable;
         }
     }
-    return ret.toOwnedSlice();
-}
+};
 
-test "execute program" {
+test "move" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const prog = &[_]Instr{
-        Instr{ .NOOP = void{} },
-        Instr{ .ADDX = 3 },
-        Instr{ .ADDX = -5 },
-    };
-    const result = try execute_prog(arena.allocator(), prog);
-    try expectEqual(result.len, 5);
-    try expectEqualSlices(i32, result, &[_]i32{ 1, 1, 1, 4, 4 });
-}
 
-fn signal_str(signals: []i32) i32 {
-    var result: i32 = 0;
-    for (0..6) |i| {
-        result += @as(i32, @intCast(20 + 40 * i)) * signals[19 + 40 * i];
-    }
-    return result;
-}
+    var board = Board.init(arena.allocator());
+    defer board.deinit();
 
-fn draw_result(signals: []i32) void {
-    for (0..6) |y| {
-        for (0..40) |x| {
-            const i = y * 40 + x;
-            if (signals[i] - 1 <= x and signals[i] + 1 >= x) {
-                std.debug.print("#", .{});
-            } else {
-                std.debug.print(".", .{});
-            }
-        }
-        std.debug.print("\n", .{});
-    }
+    board.move(.right, 4);
+    try expectEqual(board.tail_positions.count(), 4);
+    try expect(board.tail_positions.contains(Board.Coords{ .x = 0, .y = 0 }));
+    try expect(board.tail_positions.contains(Board.Coords{ .x = 1, .y = 0 }));
+    try expect(board.tail_positions.contains(Board.Coords{ .x = 2, .y = 0 }));
+    try expect(board.tail_positions.contains(Board.Coords{ .x = 3, .y = 0 }));
+    try expect(!board.tail_positions.contains(Board.Coords{ .x = 3, .y = 1 }));
 }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
 
-    var file = try File.new("input.txt");
-    var prog = std.ArrayList(Instr).init(arena.allocator());
+    var board = Board.init(arena.allocator());
+    defer board.deinit();
 
+    var file = try File.new("input.txt");
     while (try file.readline()) |line| {
-        try prog.append(try parse_instr(line));
+        const n = try std.fmt.parseInt(usize, line[2..], 10);
+        board.move(
+            switch (line[0]) {
+                'R' => .right,
+                'L' => .left,
+                'U' => .up,
+                'D' => .down,
+                else => unreachable,
+            },
+            n,
+        );
     }
-    std.debug.print("Program: {d}\n", .{prog.items.len});
-    const result = try execute_prog(arena.allocator(), prog.items);
-    // for (0..6) |i| {
-    //     const ii = 20 + 40 * i;
-    //     std.debug.print("{d} => {d};", .{ ii, result[ii - 1] });
-    // }
-    std.debug.print("Strength sum: {d}\n", .{signal_str(result)});
-    draw_result(result);
+    std.debug.print("Tail positions: {d}\n", .{board.tail_positions.count()});
 }
