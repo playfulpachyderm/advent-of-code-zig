@@ -8,8 +8,9 @@ const File = @import("utils.zig").File;
 
 const Board = struct {
     tail_positions: PositionSet,
-    H: Coords = Coords{ .x = 0, .y = 0 },
-    T: Coords = Coords{ .x = 0, .y = 0 },
+    knots: []Coords,
+    //H: Coords = Coords{ .x = 0, .y = 0 },
+    //T: Coords = Coords{ .x = 0, .y = 0 },
 
     const PositionSet = std.AutoHashMap(Coords, void);
 
@@ -25,9 +26,14 @@ const Board = struct {
         left,
     };
 
-    fn init(alloc: std.mem.Allocator) Board {
-        var ret = Board{ .tail_positions = PositionSet.init(alloc) };
-        ret.tail_positions.put(ret.T, void{}) catch unreachable;
+    fn init(alloc: std.mem.Allocator, num_knots: usize) Board {
+        var knots = std.ArrayList(Coords).init(alloc);
+        defer knots.deinit();
+        for (0..num_knots) |_| {
+            knots.append(Coords{ .x = 0, .y = 0 }) catch unreachable;
+        }
+        var ret = Board{ .tail_positions = PositionSet.init(alloc), .knots = knots.toOwnedSlice() catch unreachable };
+        ret.tail_positions.put(ret.knots[ret.knots.len - 1], void{}) catch unreachable;
         return ret;
     }
     fn deinit(self: *Board) void {
@@ -38,35 +44,49 @@ const Board = struct {
         for (0..n) |_| {
             switch (direction) {
                 .up => {
-                    self.H.y += 1;
-                    if (self.H.y > self.T.y + 1) {
-                        self.T.x = self.H.x;
-                        self.T.y = self.H.y - 1;
-                    }
+                    self.knots[0].y += 1;
                 },
                 .down => {
-                    self.H.y -= 1;
-                    if (self.H.y < self.T.y - 1) {
-                        self.T.x = self.H.x;
-                        self.T.y = self.H.y + 1;
-                    }
+                    self.knots[0].y -= 1;
                 },
                 .right => {
-                    self.H.x += 1;
-                    if (self.H.x > self.T.x + 1) {
-                        self.T.y = self.H.y;
-                        self.T.x = self.H.x - 1;
-                    }
+                    self.knots[0].x += 1;
                 },
                 .left => {
-                    self.H.x -= 1;
-                    if (self.H.x < self.T.x - 1) {
-                        self.T.y = self.H.y;
-                        self.T.x = self.H.x + 1;
-                    }
+                    self.knots[0].x -= 1;
                 },
             }
-            self.tail_positions.put(self.T, void{}) catch unreachable;
+            for (1..self.knots.len) |i| {
+                if (self.knots[i - 1].y > self.knots[i].y + 1) {
+                    // Check if both dimensions are separated, or just 1
+                    if (self.knots[i - 1].x > self.knots[i].x) {
+                        self.knots[i].x += 1;
+                    }
+                    if (self.knots[i - 1].x < self.knots[i].x) {
+                        self.knots[i].x -= 1;
+                    }
+                    self.knots[i].y = self.knots[i - 1].y - 1;
+                }
+                if (self.knots[i - 1].y < self.knots[i].y - 1) {
+                    // Check if both dimensions are separated, or just 1
+                    if (self.knots[i - 1].x > self.knots[i].x) {
+                        self.knots[i].x += 1;
+                    }
+                    if (self.knots[i - 1].x < self.knots[i].x) {
+                        self.knots[i].x -= 1;
+                    }
+                    self.knots[i].y = self.knots[i - 1].y + 1;
+                }
+                if (self.knots[i - 1].x > self.knots[i].x + 1) {
+                    self.knots[i].y = self.knots[i - 1].y;
+                    self.knots[i].x = self.knots[i - 1].x - 1;
+                }
+                if (self.knots[i - 1].x < self.knots[i].x - 1) {
+                    self.knots[i].y = self.knots[i - 1].y;
+                    self.knots[i].x = self.knots[i - 1].x + 1;
+                }
+            }
+            self.tail_positions.put(self.knots[self.knots.len - 1], void{}) catch unreachable;
         }
     }
 };
@@ -75,7 +95,7 @@ test "move" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var board = Board.init(arena.allocator());
+    var board = Board.init(arena.allocator(), 2);
     defer board.deinit();
 
     board.move(.right, 4);
@@ -91,7 +111,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
 
-    var board = Board.init(arena.allocator());
+    var board = Board.init(arena.allocator(), 10);
     defer board.deinit();
 
     var file = try File.new("input.txt");
